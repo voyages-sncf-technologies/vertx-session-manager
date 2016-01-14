@@ -1,6 +1,7 @@
 package com.campudus.vertx.sessionmanager
 
 import java.util.UUID
+import com.vsct.vertx.sessionmanager.IdGenerator
 import org.vertx.java.core.AsyncResult
 import org.vertx.java.core.AsyncResultHandler
 import org.vertx.java.core.Handler
@@ -50,6 +51,19 @@ class SharedDataSessionStore(sm: SessionManager, sharedSessionsName: String, sha
       Future.successful(new JsonObject().putObject("data", result))
   }
 
+  override def removeSessionValue(sessionId: String, fields: JsonArray): Future[Boolean] =  sharedSessions.get(sessionId) match {
+    case null =>
+      Future.failed(new SessionException("SESSION_GONE", "Cannot remove data from session '" + sessionId + "'. Session is gone."))
+
+    case sessionString =>
+      val session = new JsonObject(sessionString)
+      for (key <- fields.toArray if key.isInstanceOf[String]) {
+        session.removeField(key.asInstanceOf[String])
+      }
+      sharedSessions.put(sessionId, session.encode)
+      Future.successful(true)
+  }
+
   override def putSession(sessionId: String, data: JsonObject): Future[Boolean] = {
     sharedSessions.get(sessionId) match {
       case null =>
@@ -84,16 +98,17 @@ class SharedDataSessionStore(sm: SessionManager, sharedSessionsName: String, sha
       }
   }
 
-  override def startSession(): Future[String] = {
-    val sessionId = UUID.randomUUID.toString
+  override def startSession(sessionId:String, timerId: Long): Future[String] = {
+    //val sessionId = UUID.randomUUID.toString
+    //val sessionId = IdGenerator.generateSessionId
     sharedSessions.putIfAbsent(sessionId, "{}") match {
       case null =>
-        sharedSessionTimeouts.put(sessionId, sm.createTimer(sessionId).toString)
+        sharedSessionTimeouts.put(sessionId, timerId.toString)
         // There is no session with this uuid -> return it
         Future.successful(sessionId)
       case anotherSessionId =>
         // There was a session with this uuid -> create a new one
-        startSession()
+        startSession(sessionId, timerId)
     }
   }
 }

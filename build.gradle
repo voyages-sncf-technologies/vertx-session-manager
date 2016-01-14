@@ -6,6 +6,7 @@ dependencies {
   scalaTools "org.scala-lang:scala-compiler:${project.scalaVersion}"
   // Libraries needed for scala api
   provided "org.scala-lang:scala-library:${project.scalaVersion}"
+  compile 'org.slf4j:slf4j-api:1.7.9'
 }
 
 def configurePom(def pom) {
@@ -14,7 +15,6 @@ def configurePom(def pom) {
     description 'The session manager stores session data via the event bus'
     inceptionYear '2013'
     packaging 'zip'
-    url 'http://www.github.com/campudus/vertx-session-manager'
 
     developers {
       developer {
@@ -25,7 +25,7 @@ def configurePom(def pom) {
     }
 
     scm {
-      url 'git://github.com/campudus/vertx-session-manager.git'
+      url 'git@gitlab.socrate.vsct.fr:dwm-sii/vertx-session-manager.git'
     }
 
     licenses {

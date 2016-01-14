@@ -17,7 +17,7 @@ class SessionManagerMongoDbTest extends SessionManagerBaseTestClient {
   config.putObject("mongoConfig", mongoConfig)
 
   override protected def setUp() = {
-    val promise = Promise[Unit]
+    val promise = Promise[Unit]()
     container.deployModule("io.vertx~mod-mongo-persistor~2.0.0-final", mongoConfig, { ar: AsyncResult[String] =>
       if (ar.succeeded()) {
         promise.success()
@@ -29,51 +29,54 @@ class SessionManagerMongoDbTest extends SessionManagerBaseTestClient {
   }
 
   @Test
-  override def testClear() = super.testClear
+  override def testClear() = super.testClear()
 
   @Test
-  override def testCreateSession() = super.testCreateSession
+  override def testCreateSession() = super.testCreateSession()
 
   @Test
-  override def testPutSession() = super.testPutSession
+  override def testPutSession() = super.testPutSession()
 
   @Test
-  override def testPutAndGetSession() = super.testPutAndGetSession
+  override def testPutAndGetSession() = super.testPutAndGetSession()
 
   @Test
-  override def testGetFieldsSession() = super.testGetFieldsSession
+  override def testGetFieldsSession() = super.testGetFieldsSession()
 
   @Test
-  override def testCheckErrorTypes() = super.testCheckErrorTypes
+  override def testCheckErrorTypes() = super.testCheckErrorTypes()
 
   @Test
-  override def testOverwriteSessionData() = super.testOverwriteSessionData
+  override def testOverwriteSessionData() = super.testOverwriteSessionData()
 
   @Test
-  override def testCheckMatchInSessions() = super.testCheckMatchInSessions
+  override def testCheckMatchInSessions() = super.testCheckMatchInSessions()
 
   @Test
-  override def testConnectionsReport() = super.testConnectionsReport
+  override def testConnectionsReport() = super.testConnectionsReport()
 
   @Test
-  override def testDestroySession() = super.testDestroySession
+  override def testDestroySession() = super.testDestroySession()
 
   @Test
-  override def testCleanupAfterSession() = super.testCleanupAfterSession
+  override def testCleanupAfterSession() = super.testCleanupAfterSession()
 
   @Test
-  override def testNoSessionsAfterTimeout() = super.testNoSessionsAfterTimeout
+  override def testNoSessionsAfterTimeout() = super.testNoSessionsAfterTimeout()
 
   @Test
-  override def testTimeoutSession() = super.testTimeoutSession
+  override def testTimeoutSession() = super.testTimeoutSession()
 
   @Test
-  override def testNoTimeoutSession() = super.testNoTimeoutSession
+  override def testNoTimeoutSession() = super.testNoTimeoutSession()
 
   @Test
-  override def testHeartbeatSession() = super.testHeartbeatSession
+  override def testHeartbeatSession() = super.testHeartbeatSession()
 
   @Test
-  override def testErrorOnHeartbeatWithNotExistingSession() = super.testErrorOnHeartbeatWithNotExistingSession
+  override def testErrorOnHeartbeatWithNotExistingSession() = super.testErrorOnHeartbeatWithNotExistingSession()
+
+  @Test
+  override def testRemoveValueFromSession() = super.testRemoveValueFromSession()
 
 }

@@ -35,8 +35,8 @@ archivesBaseName = modname
 
 defaultTasks = ['assemble']
 
-sourceCompatibility = '1.7'
-targetCompatibility = '1.7'
+sourceCompatibility = '1.8'
+targetCompatibility = '1.8'
 
 project.ext.moduleName = "$modowner~$modname~$version"
 
@@ -52,7 +52,7 @@ repositories {
     // are concurrent builds
     mavenLocal()
   }
-  maven { url 'https://oss.sonatype.org/content/repositories/snapshots' }
+  maven { url 'http://bloodymary.socrate.vsct.fr:50080/nexus/content/groups/public' }
   mavenCentral()
 }
 
@@ -73,7 +73,7 @@ buildscript {
       // are concurrent builds
       mavenLocal()
     }
-    maven { url 'https://oss.sonatype.org/content/repositories/snapshots' }
+    maven { url 'http://bloodymary.socrate.vsct.fr:50080/nexus/content/groups/public' }
     mavenCentral()
   }
 
@@ -113,6 +113,11 @@ task sourceJar(type: Jar) {
   description = 'Builds a source jar artifact suitable for maven deployment.'
   classifier = 'sources'
   from sourceSets.main.java
+}
+
+javadoc {
+  classpath = configurations.compile + configurations.provided
+  failOnError = false
 }
 
 task javadocJar(type: Jar) {
@@ -223,3 +228,5 @@ plugins.withType(IdeaPlugin) {
     }
   }
 }
+
+tasks.withType(ScalaCompile) { scalaCompileOptions.useAnt = false }

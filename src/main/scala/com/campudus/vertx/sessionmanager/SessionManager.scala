@@ -16,6 +16,7 @@
 
 package com.campudus.vertx.sessionmanager
 
+import com.vsct.vertx.sessionmanager.IdGenerator
 import org.vertx.java.core.{ AsyncResult, AsyncResultHandler, Handler }
 import org.vertx.java.core.eventbus.Message
 import org.vertx.java.core.json.{ JsonArray, JsonObject }
@@ -25,11 +26,18 @@ import scala.util.Success
 import scala.util.Failure
 import scala.util.Try
 
+object SessionManager {
+  val defaultAddress = "campudus.session"
+  val defaultTimeout: Long = 30 * 60 * 1000 // 30 minutes
+  val defaultSessionClientPrefix = "campudus.session."
+}
+
 /**
  * Session Manager Module for Vert.x
- * <p>Please see README.md for full documentation.
+ * <p>Please see README.md for full documentation.</p>
  * @author <a href="http://www.campudus.com/">Joern Bernhardt</a>
  * @author <a href="http://www.campudus.com/">Maximilian Stemplinger</a>
+ * @author Patrice Chalcol
  */
 class SessionManager extends Verticle with Handler[Message[JsonObject]] with VertxScalaHelpers {
 
@@ -45,13 +53,17 @@ class SessionManager extends Verticle with Handler[Message[JsonObject]] with Ver
 
   override def start() {
     val config = container.config
-    vertx.eventBus().registerHandler(config.getString("address", defaultAddress), SessionManager.this)
-    val timeout = config.getNumber("timeout");
-    configTimeout = if (timeout != null) timeout.longValue else configTimeout
-    cleanupAddress = Option(config.getString("cleaner"))
-    sessionClientPrefix = config.getString("prefix", defaultSessionClientPrefix)
-    mongoCollection = Option(config.getObject("mongo-sessions"))
 
+    vertx.eventBus().registerHandler(config.getString("address", defaultAddress), SessionManager.this)
+
+    val timeout = config.getNumber("timeout")
+    configTimeout = if (timeout != null) timeout.longValue else configTimeout
+
+    cleanupAddress = Option(config.getString("cleaner"))
+
+    sessionClientPrefix = config.getString("prefix", defaultSessionClientPrefix)
+
+    mongoCollection = Option(config.getObject("mongo-sessions"))
     mongoCollection match {
       case Some(conf) =>
         val address = conf.getString("address")
@@ -69,31 +81,137 @@ class SessionManager extends Verticle with Handler[Message[JsonObject]] with Ver
 
   }
 
-  private def replyOk(success: JsonObject)(implicit message: Message[JsonObject]): Unit = {
-    val body = success.putString("status", "ok")
-    message.reply(body)
-  }
-  private def replyError(error: Throwable)(implicit message: Message[JsonObject]): Unit = {
-    val errorId = error match {
-      case sessionException: SessionException => sessionException.errorId
-      case _ => "SESSIONSTORE_ERROR"
-    }
-    replyError(errorId, error.getMessage)
-  }
-  private def replyError(id: String, message: String)(implicit msg: Message[JsonObject]): Unit = {
-    val body = json.putString("status", "error").putString("error", id).putString("message", message)
-    msg.reply(body)
-  }
-  private def replyResult(res: Try[JsonObject])(implicit message: Message[JsonObject]): Unit = res match {
-    case Success(result) => replyOk(result)
-    case Failure(error) => replyError(error)
-  }
-  private def replyResultWithHeartbeat(sessionId: String)(res: Try[JsonObject])(implicit message: Message[JsonObject]): Unit = {
-    res match {
-      case Success(result) =>
-        heartBeat(sessionId) onComplete { case _ => replyOk(result) }
-      case Failure(error) =>
-        replyError(error)
+  override def handle(msg: Message[JsonObject]) {
+    implicit val message = msg
+
+    Option[Any](message.body.getField("action")) match {
+
+      case Some("start") =>
+        val sessionId = IdGenerator.generateSessionId
+        val timerId = createTimer(sessionId)
+        sessionStore.startSession(sessionId, timerId) map (json.putString("sessionId", _)) onComplete replyResult
+
+      case Some("heartbeat") =>
+        Option[Any](message.body.getField("sessionId")) match {
+          case None => replyError("SESSIONID_MISSING", "No usable heartbeat: sessionId missing!")
+
+          case Some(sessionId: String) =>
+            heartBeat(sessionId) map { ignore =>
+              json.putNumber("timeout", configTimeout)
+            } onComplete replyResult
+
+          case Some(unknownSessionIdType) =>
+            replyError("WRONG_DATA_TYPE", "Cannot send heartbeat: 'sessionId' has to be a String.")
+        }
+
+      case Some("destroy") =>
+        Option[Any](message.body.getField("sessionId")) match {
+          case None => replyError("SESSIONID_MISSING", "Cannot destroy session, sessionId missing!")
+
+          case Some(sessionId: String) =>
+            destroySession(sessionId, None, "SESSION_KILL") map { result =>
+              json.putBoolean("sessionDestroyed", true)
+            } onComplete replyResult
+
+          case Some(unknownSessionIdType) =>
+            replyError("WRONG_DATA_TYPE", "Cannot destroy session: 'sessionId' has to be a String.")
+        }
+
+      case Some("status") =>
+        Option[Any](message.body.getField("report")) match {
+          case Some("connections") =>
+            sessionStore.getOpenSessions() map { result =>
+              json.putNumber("openSessions", result)
+            } onComplete replyResult
+
+          case Some("matches") => Option[Any](message.body.getField("data")) match {
+            case None =>
+              replyError("DATA_MISSING", "You have to specify 'data' as a JsonObject to match the sessions on.")
+            case Some(data: JsonObject) =>
+              sessionStore.getMatches(data) map { result =>
+                json.putBoolean("matches", result.size > 0).putArray("sessions", result)
+              } onComplete replyResult
+            case Some(unknownDataType) =>
+              replyError("WRONG_DATA_TYPE", "Cannot match on data: 'data' has to be a JsonObject.")
+          }
+
+          case unknown =>
+            replyError("UNKNOWN_REPORT_REQUEST", "You have to specify the field 'report' as a String with a recognized report option.")
+        }
+
+      case Some("clear") =>
+        sessionStore.clearAllSessions() map { _ =>
+          json.putBoolean("cleared", true)
+        } recover {
+          case _ => json.putBoolean("cleared", false)
+        } onComplete replyResult
+
+      case Some("get") => Option[Any](message.body.getField("sessionId")) match {
+        case None =>
+          replyError("SESSIONID_MISSING", "Cannot get data from session: sessionId parameter is missing.")
+
+        case Some(sessionId: String) =>
+          val fields = Option[Any](message.body.getField("fields")) match {
+            case None =>
+              replyError("FIELDS_MISSING", "Cannot get data from session '" + sessionId + "': fields parameter is missing.")
+              return // Error!
+            case Some(list: JsonArray) => list
+            case Some(obj: String) => new JsonArray().addString(obj.toString)
+            case Some(unknownType) =>
+              replyError("WRONG_DATA_TYPE", "Cannot get data from session: 'fields' has to be a String or a JsonArray containing Strings.")
+              return
+          }
+          sessionStore.getSessionData(sessionId, fields) onComplete replyResultWithHeartbeat(sessionId)
+
+        case Some(unknownType) =>
+          replyError("WRONG_DATA_TYPE", "Cannot get data from session: 'sessionId' has to be a String.")
+      }
+
+      case Some("put") => Option[Any](message.body.getField("sessionId")) match {
+        case None =>
+          replyError("SESSIONID_MISSING", "Cannot put data in session: sessionId parameter is missing.")
+
+        case Some(sessionId: String) => Option[Any](message.body.getField("data")) match {
+          case None =>
+            replyError("DATA_MISSING", "Cannot put data in session '" + sessionId + "': data is missing.")
+          case Some(data: JsonObject) =>
+            sessionStore.putSession(sessionId, data) map { res =>
+              json.putBoolean("sessionSaved", res)
+            } onComplete replyResultWithHeartbeat(sessionId)
+          case Some(unknownType) =>
+            replyError("WRONG_DATA_TYPE", "Cannot put data in session: 'data' has to be a JsonObject.")
+        }
+
+        case Some(unknownSessionIdType) =>
+          replyError("WRONG_DATA_TYPE", "Cannot put data in session: 'sessionId' has to be a String.")
+      }
+
+      case Some("remove") => Option[Any](message.body.getField("sessionId")) match {
+        case None =>
+          replyError("SESSIONID_MISSING", "Cannot get data from session: sessionId parameter is missing.")
+
+        case Some(sessionId: String) =>
+          val fields = Option[Any](message.body.getField("fields")) match {
+            case None =>
+              replyError("FIELDS_MISSING", "Cannot remove data from session '" + sessionId + "': fields parameter is missing.")
+              return // Error!
+            case Some(list: JsonArray) => list
+            case Some(obj: String) => new JsonArray().addString(obj.toString)
+            case Some(unknownType) =>
+              replyError("WRONG_DATA_TYPE", "Cannot get data from session: 'fields' has to be a String or a JsonArray containing Strings.")
+              return
+          }
+          sessionStore.removeSessionValue(sessionId, fields) map { res =>
+            json.putBoolean("sessionUpdated", res)
+          } onComplete replyResultWithHeartbeat(sessionId)
+
+        case Some(unknownType) =>
+          replyError("WRONG_DATA_TYPE", "Cannot get data from session: 'sessionId' has to be a String.")
+      }
+
+      case Some(unknown) => replyError("UNKNOWN_COMMAND", "Session manager does not understand action '" + unknown + "'.")
+
+      case None => replyError("UNKNOWN_COMMAND", "There was no 'action' parameter set.")
     }
   }
 
@@ -121,6 +239,30 @@ class SessionManager extends Verticle with Handler[Message[JsonObject]] with Ver
     })
   }
 
+  def clearSession(sessionId: String, sessionTimer: Long, session: JsonObject, cause: String = "SESSION_KILL") {
+    cancelTimer(sessionTimer)
+    tellClientSessionIsKilled(sessionId, cause)
+    cleanUpSession(sessionId, session)
+  }
+
+  def destroySession(sessionId: String, timerId: Option[Long], cause: String = "SESSION_KILL"): Future[JsonObject] = {
+    sessionStore.removeSession(sessionId, timerId) transform ({ result =>
+      Option(result.getNumber("sessionTimer")) match {
+        case Some(timer) => cancelTimer(timer.longValue())
+        case None =>
+      }
+      Option(result.getObject("session")) match {
+        case Some(session) => cleanUpSession(sessionId, session)
+        case None =>
+      }
+      tellClientSessionIsKilled(sessionId, cause)
+      result
+    }, { cause =>
+      container.logger().warn("Could not remove session " + sessionId, cause)
+      cause
+    })
+  }
+
   private def heartBeat(sessionId: String) = resetTimer(sessionId)
 
   private def tellClientSessionIsKilled(sessionId: String, cause: String) = {
@@ -135,118 +277,35 @@ class SessionManager extends Verticle with Handler[Message[JsonObject]] with Ver
     }
   }
 
-  def clearSession(sessionId: String, sessionTimer: Long, session: JsonObject, cause: String = "SESSION_KILL") {
-    cancelTimer(sessionTimer)
-    tellClientSessionIsKilled(sessionId, cause)
-    cleanUpSession(sessionId, session)
+  private def replyOk(success: JsonObject)(implicit message: Message[JsonObject]): Unit = {
+    val body = success.putString("status", "ok")
+    message.reply(body)
   }
 
-  def destroySession(sessionId: String, timerId: Option[Long], cause: String = "SESSION_KILL"): Future[JsonObject] = {
-    tellClientSessionIsKilled(sessionId, cause)
-    sessionStore.removeSession(sessionId, timerId) transform ({ result =>
-      cancelTimer(result.getNumber("sessionTimer").longValue())
-      cleanUpSession(sessionId, result.getObject("session"))
-      result
-    }, { cause =>
-      container.logger().warn("Could not remove session " + sessionId, cause)
-      cause
-    })
+  private def replyError(error: Throwable)(implicit message: Message[JsonObject]): Unit = {
+    val errorId = error match {
+      case sessionException: SessionException => sessionException.errorId
+      case _ => "SESSIONSTORE_ERROR"
+    }
+    replyError(errorId, error.getMessage)
   }
 
-  override def handle(msg: Message[JsonObject]) {
-    implicit val message = msg
+  private def replyError(id: String, message: String)(implicit msg: Message[JsonObject]): Unit = {
+    val body = json.putString("status", "error").putString("error", id).putString("message", message)
+    msg.reply(body)
+  }
 
-    Option[Any](message.body.getField("action")) match {
-      case Some("get") => Option[Any](message.body.getField("sessionId")) match {
-        case None =>
-          replyError("SESSIONID_MISSING", "Cannot get data from session: sessionId parameter is missing.")
-        case Some(sessionId: String) =>
-          val fields = Option[Any](message.body.getField("fields")) match {
-            case None =>
-              replyError("FIELDS_MISSING", "Cannot get data from session '" + sessionId + "': fields parameter is missing.")
-              return // Error!
-            case Some(list: JsonArray) => list
-            case Some(obj: String) => new JsonArray().addString(obj.toString)
-            case Some(unknownType) =>
-              replyError("WRONG_DATA_TYPE", "Cannot get data from session: 'fields' has to be a String or a JsonArray containing Strings.")
-              return
-          }
-          sessionStore.getSessionData(sessionId, fields) onComplete replyResultWithHeartbeat(sessionId)
-        case Some(unknownType) =>
-          replyError("WRONG_DATA_TYPE", "Cannot get data from session: 'sessionId' has to be a String.")
-      }
+  private def replyResult(res: Try[JsonObject])(implicit message: Message[JsonObject]): Unit = res match {
+    case Success(result) => replyOk(result)
+    case Failure(error) => replyError(error)
+  }
 
-      case Some("put") => Option[Any](message.body.getField("sessionId")) match {
-        case None =>
-          replyError("SESSIONID_MISSING", "Cannot put data in session: sessionId parameter is missing.")
-        case Some(sessionId: String) => Option[Any](message.body.getField("data")) match {
-          case None =>
-            replyError("DATA_MISSING", "Cannot put data in session '" + sessionId + "': data is missing.")
-          case Some(data: JsonObject) =>
-            sessionStore.putSession(sessionId, data) map { res =>
-              json.putBoolean("sessionSaved", res)
-            } onComplete replyResultWithHeartbeat(sessionId)
-          case Some(unknownType) =>
-            replyError("WRONG_DATA_TYPE", "Cannot put data in session: 'data' has to be a JsonObject.")
-        }
-        case Some(unknownSessionIdType) =>
-          replyError("WRONG_DATA_TYPE", "Cannot put data in session: 'sessionId' has to be a String.")
-      }
-
-      case Some("start") =>
-        sessionStore.startSession() map (json.putString("sessionId", _)) onComplete replyResult
-
-      case Some("heartbeat") =>
-        Option[Any](message.body.getField("sessionId")) match {
-          case None => replyError("SESSIONID_MISSING", "No usable heartbeat: sessionId missing!")
-          case Some(sessionId: String) =>
-            heartBeat(sessionId) map { ignore =>
-              json.putNumber("timeout", configTimeout)
-            } onComplete replyResult
-          case Some(unknownSessionIdType) =>
-            replyError("WRONG_DATA_TYPE", "Cannot send heartbeat: 'sessionId' has to be a String.")
-        }
-
-      case Some("destroy") =>
-        Option[Any](message.body.getField("sessionId")) match {
-          case None => replyError("SESSIONID_MISSING", "Cannot destroy session, sessionId missing!")
-          case Some(sessionId: String) =>
-            destroySession(sessionId, None, "SESSION_KILL") map { result =>
-              json.putBoolean("sessionDestroyed", true)
-            } onComplete replyResult
-          case Some(unknownSessionIdType) =>
-            replyError("WRONG_DATA_TYPE", "Cannot destroy session: 'sessionId' has to be a String.")
-        }
-
-      case Some("status") =>
-        // TODO more reports for the administrator
-        Option[Any](message.body.getField("report")) match {
-          case Some("connections") =>
-            sessionStore.getOpenSessions() map { result =>
-              json.putNumber("openSessions", result)
-            } onComplete replyResult
-          case Some("matches") => Option[Any](message.body.getField("data")) match {
-            case None =>
-              replyError("DATA_MISSING", "You have to specify 'data' as a JsonObject to match the sessions on.")
-            case Some(data: JsonObject) =>
-              sessionStore.getMatches(data) map { result =>
-                json.putBoolean("matches", result.size > 0).putArray("sessions", result)
-              } onComplete replyResult
-            case Some(unknownDataType) =>
-              replyError("WRONG_DATA_TYPE", "Cannot match on data: 'data' has to be a JsonObject.")
-          }
-          case unknown =>
-            replyError("UNKNOWN_REPORT_REQUEST", "You have to specify the field 'report' as a String with a recognized report option.")
-        }
-
-      case Some("clear") =>
-        sessionStore.clearAllSessions() map { _ =>
-          json.putBoolean("cleared", true)
-        } recover {
-          case _ => json.putBoolean("cleared", false)
-        } onComplete replyResult
-      case Some(unknown) => replyError("UNKNOWN_COMMAND", "Session manager does not understand action '" + unknown + "'.")
-      case None => replyError("UNKNOWN_COMMAND", "There was no 'action' parameter set.")
+  private def replyResultWithHeartbeat(sessionId: String)(res: Try[JsonObject])(implicit message: Message[JsonObject]): Unit = {
+    res match {
+      case Success(result) =>
+        heartBeat(sessionId) onComplete { case _ => replyOk(result) }
+      case Failure(error) =>
+        replyError(error)
     }
   }
 
@@ -260,10 +319,4 @@ class SessionManager extends Verticle with Handler[Message[JsonObject]] with Ver
     errorJson
   }
 
-}
-
-object SessionManager {
-  val defaultAddress = "campudus.session"
-  val defaultTimeout: Long = 30 * 60 * 1000 // 30 minutes
-  val defaultSessionClientPrefix = "campudus.session."
 }

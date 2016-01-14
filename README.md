@@ -31,7 +31,7 @@ The session manager module takes the following configuration:
         "map-sessions": <sharedMap>,
         "mongo-sessions": {
             "address": <mongoAddress>,
-            "collection-name": <collection-name>
+            "collection": <collection-name>
         }
     }
 

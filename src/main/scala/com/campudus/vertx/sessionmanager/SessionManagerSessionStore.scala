@@ -15,11 +15,13 @@ abstract class SessionManagerSessionStore {
   def getSessionData(sessionId: String, fields: JsonArray): Future[JsonObject]
 
   def putSession(sessionId: String, session: JsonObject): Future[Boolean]
+  
+  def removeSessionValue(sessionId: String, fields: JsonArray): Future[Boolean]
 
   def removeSession(sessionId: String, timerId: Option[Long]): Future[JsonObject]
 
   def resetTimer(sessionId: String, newTimerId: Long): Future[Long]
 
-  def startSession(): Future[String]
+  def startSession(sessionId:String, timerId: Long): Future[String]
 
 }

@@ -60,5 +60,8 @@ class SessionManagerSharedDataTest extends SessionManagerBaseTestClient {
   @Test
   override def testErrorOnHeartbeatWithNotExistingSession() = super.testErrorOnHeartbeatWithNotExistingSession
 
+  @Test
+  override def testRemoveValueFromSession() = super.testRemoveValueFromSession
+
 }
 

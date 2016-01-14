@@ -3,6 +3,9 @@
 
 # eclipse specific
 .settings/
+.DS_Store
+.gradle
+.idea
 .classpath
 .project
 bin/
@@ -24,3 +27,31 @@ project/plugins/project/
 
 # Scala specific
 .cache
+
+.DS_Store
+.gradle
+.idea
+.classpath
+.project
+.settings
+.yardoc
+.yardopts
+bin
+build
+target
+out
+*.iml
+*.ipr
+*.iws
+test-output
+Scratch.java
+ScratchTest.java
+test-results
+test-tmp
+*.class
+mods
+classes
+generated-sources
+generated_ws
+doc
+

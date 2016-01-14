@@ -3,13 +3,11 @@ package com.campudus.vertx.sessionmanager
 import org.vertx.testtools.TestVerticle
 import org.vertx.testtools.VertxAssert._
 import org.vertx.java.core.json.JsonObject
-import org.vertx.java.core.AsyncResultHandler
 import org.vertx.java.core.AsyncResult
 import scala.concurrent.Future
 import org.vertx.java.core.eventbus.Message
 import org.vertx.java.core.json.JsonArray
 import java.util.concurrent.atomic.AtomicInteger
-import org.junit.Test
 import org.vertx.java.core.Handler
 
 abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScalaHelpers {
@@ -116,6 +114,16 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
       continueAfterNoErrorReply {
         msgAfterGet =>
           after(msgAfterGet.body.getObject("data"))
+      })
+  }
+
+  private def removeSessionValue(sessionId: String, fields: JsonArray)(after: JsonObject => Unit) {
+    getVertx().eventBus().send(smAddress, new JsonObject().putString("action", "remove")
+      .putString("sessionId", sessionId)
+      .putArray("fields", fields),
+      continueAfterNoErrorReply {
+        msgAfterRemove =>
+          after(msgAfterRemove.body)
       })
   }
 
@@ -514,7 +522,7 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
                             getVertx().eventBus().send(smAddress, new JsonObject().putString("action", "status").putString("report", "connections"), continueAfterNoErrorReply {
                               msgAfterStatus =>
                                 val openSessions = msgAfterStatus.body.getNumber("openSessions", 1000)
-                                assertEquals("There shouldn't be any open sessions anymore, but got " + openSessions, 0, openSessions)
+                                assertEquals("There shouldn't be any open sessions anymore, but got " + openSessions, Long.box(0), openSessions)
                                 testComplete()
                             })
                           }
@@ -671,6 +679,29 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
                   }
                 })
             })
+      }
+    }
+  }
+
+  def testRemoveValueFromSession() {
+    afterClearDo {
+      afterPutDo {
+        sessionId =>
+          Thread.sleep(noTimeoutTest)
+          removeSessionValue(sessionId, new JsonArray().addString("teststring")) {
+            result =>
+              assertTrue(result.getBoolean("sessionUpdated"))
+              Thread.sleep(noTimeoutTest)
+              getSessionData(sessionId, new JsonArray().addString("teststring")) {
+                data =>
+                  assertNull(data.getString("teststring"))
+                  getSessionData(sessionId, new JsonArray().addString("answer")) {
+                    data =>
+                      assertEquals(42, data.getNumber("answer"))
+                      testComplete()
+                  }
+              }
+          }
       }
     }
   }
