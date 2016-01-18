@@ -98,14 +98,14 @@ class SharedDataSessionStore(sm: SessionManager, sharedSessionsName: String, sha
       }
   }
 
-  override def startSession(sessionId:String, timerId: Long): Future[String] = {
+  override def startSession(sessionId:String, timerId: Long): Future[(String, Long)] = {
     //val sessionId = UUID.randomUUID.toString
     //val sessionId = IdGenerator.generateSessionId
     sharedSessions.putIfAbsent(sessionId, "{}") match {
       case null =>
         sharedSessionTimeouts.put(sessionId, timerId.toString)
         // There is no session with this uuid -> return it
-        Future.successful(sessionId)
+        Future.successful(sessionId, timerId)
       case anotherSessionId =>
         // There was a session with this uuid -> create a new one
         startSession(sessionId, timerId)

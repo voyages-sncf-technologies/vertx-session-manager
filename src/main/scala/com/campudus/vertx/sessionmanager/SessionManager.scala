@@ -89,7 +89,8 @@ class SessionManager extends Verticle with Handler[Message[JsonObject]] with Ver
       case Some("start") =>
         val sessionId = IdGenerator.generateSessionId
         val timerId = createTimer(sessionId)
-        sessionStore.startSession(sessionId, timerId) map (json.putString("sessionId", _)) onComplete replyResult
+        sessionStore.startSession(sessionId, timerId) map ( res =>
+          json.putString("sessionId", res._1).putNumber("timerId", res._2)) onComplete replyResult
 
       case Some("heartbeat") =>
         Option[Any](message.body.getField("sessionId")) match {
@@ -109,7 +110,9 @@ class SessionManager extends Verticle with Handler[Message[JsonObject]] with Ver
           case None => replyError("SESSIONID_MISSING", "Cannot destroy session, sessionId missing!")
 
           case Some(sessionId: String) =>
-            destroySession(sessionId, None, "SESSION_KILL") map { result =>
+            val timerId = Option(message.body.getField("timerId"))
+            println(s"Destroy: ${Console.GREEN}timerId = $timerId${Console.RESET}")
+            destroySession(sessionId, timerId, "SESSION_KILL") map { result =>
               json.putBoolean("sessionDestroyed", true)
             } onComplete replyResult
 
@@ -221,6 +224,7 @@ class SessionManager extends Verticle with Handler[Message[JsonObject]] with Ver
         destroySession(sessionId, Some(timerId), "SESSION_TIMEOUT")
       }
     })
+    println(s"createTimer: ${Console.GREEN}timerId = $timerId${Console.RESET}")
     timerId
   }
 
@@ -228,11 +232,12 @@ class SessionManager extends Verticle with Handler[Message[JsonObject]] with Ver
     vertx.cancelTimer(timerId)
   }
 
-  def resetTimer(sessionId: String): Future[Boolean] = {
+  def resetTimer(sessionId: String): Future[(Boolean, Long)] = {
+    println(s"${Console.GREEN}resetTimer${Console.RESET}")
     val timerId = createTimer(sessionId)
-    sessionStore.resetTimer(sessionId, timerId).transform({ result =>
+    sessionStore.resetTimer(sessionId, timerId) transform ({ result =>
       cancelTimer(result)
-      true
+      (true, timerId)
     }, { error =>
       cancelTimer(timerId)
       error
@@ -303,7 +308,15 @@ class SessionManager extends Verticle with Handler[Message[JsonObject]] with Ver
   private def replyResultWithHeartbeat(sessionId: String)(res: Try[JsonObject])(implicit message: Message[JsonObject]): Unit = {
     res match {
       case Success(result) =>
-        heartBeat(sessionId) onComplete { case _ => replyOk(result) }
+        heartBeat(sessionId) onComplete {
+          case Success((bool, timerId)) =>
+            println(s"${Console.BLUE}(bool, timerId) = ($bool, $timerId)${Console.RESET}")
+            println(s"${Console.BLUE}result = $result${Console.RESET}")
+            replyOk(result.putNumber("sessionTimer", timerId))
+
+          case _ =>
+            replyOk(result)
+        }
       case Failure(error) =>
         replyError(error)
     }

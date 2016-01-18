@@ -40,9 +40,6 @@ class SessionManagerSharedDataTest extends SessionManagerBaseTestClient {
   override def testConnectionsReport() = super.testConnectionsReport
 
   @Test
-  override def testDestroySession() = super.testDestroySession
-
-  @Test
   override def testCleanupAfterSession() = super.testCleanupAfterSession
 
   @Test

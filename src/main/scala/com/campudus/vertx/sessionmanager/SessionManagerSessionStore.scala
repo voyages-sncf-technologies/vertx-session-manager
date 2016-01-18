@@ -22,6 +22,6 @@ abstract class SessionManagerSessionStore {
 
   def resetTimer(sessionId: String, newTimerId: Long): Future[Long]
 
-  def startSession(sessionId:String, timerId: Long): Future[String]
+  def startSession(sessionId:String, timerId: Long): Future[(String, Long)]
 
 }

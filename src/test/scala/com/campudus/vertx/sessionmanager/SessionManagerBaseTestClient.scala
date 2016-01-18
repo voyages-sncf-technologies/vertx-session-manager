@@ -97,13 +97,14 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
       })
   }
 
-  private def afterCreateDo(after: String => Unit) {
+  private def afterCreateDo(after: (String, Long) => Unit) {
     val json = new JsonObject().putString("action", "start")
 
     getVertx().eventBus.send(smAddress, json, continueAfterNoErrorReply {
       msg =>
         assertNotNull("sessionId should be a string after create, but is null.", msg.body.getString("sessionId"))
-        after(msg.body.getString("sessionId"))
+        assertNotNull("timerId should be a long after create, but is null.", msg.body.getLong("timerId"))
+        after(msg.body.getString("sessionId"), msg.body.getLong("timerId"))
     })
   }
 
@@ -127,29 +128,31 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
       })
   }
 
-  private def afterPutDo(data: JsonObject)(after: String => Unit) {
+  private def afterPutDo(data: JsonObject)(after: (String, Long) => Unit) {
     afterCreateDo {
-      sessionId =>
+      (sessionId: String, timerId: Long) =>
         getVertx().eventBus().send(smAddress,
           new JsonObject().putString("action", "put")
             .putString("sessionId", sessionId)
             .putObject("data", data),
           continueAfterNoErrorReply {
             msgAfterPut =>
+              println(s"${Console.GREEN}${msgAfterPut.body().encode()}${Console.RESET}")
               assertTrue("Session should have been saved!", msgAfterPut.body.getBoolean("sessionSaved", false))
-              after(sessionId)
+              after(sessionId, timerId)
           })
     }
   }
 
-  private def afterPutDo(after: String => Unit) {
+  private def afterPutDo(after: (String, Long) => Unit) {
     afterPutDo(someData)(after)
   }
 
-  private def afterPutAndGetDo(after: String => Unit) {
+  private def afterPutAndGetDo(after: (String, Long) => Unit) {
     afterClearDo {
       afterPutDo {
-        sessionId =>
+        (sessionId: String, timerId: Long) =>
+          Thread.sleep(1000)
           val asynchTests = new AtomicInteger(0)
           val asynchTestCount = 2
 
@@ -165,6 +168,7 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
                   .addString("answer")),
             continueAfterNoErrorReply {
               msgAfterGet =>
+                println(s"${Console.GREEN}msgAfterGet=${msgAfterGet.body().encode()}${Console.RESET}")
                 val data = msgAfterGet.body.getObject("data")
                 assertNotNull("Should receive data, but got null", data != null)
                 val object1 = data.getObject("object1")
@@ -181,7 +185,9 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
                 assertEquals("Should get 42 as answer", 42, answer.intValue)
 
                 if (asynchTests.incrementAndGet == asynchTestCount) {
-                  after(sessionId)
+                  val sessionTimer: Long = msgAfterGet.body().getLong("sessionTimer")
+                  println(s"afterPutAndGetDo: sessionTimer = $sessionTimer")
+                  after(sessionId, sessionTimer)
                 }
             })
 
@@ -205,7 +211,9 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
                 assertNull("Should not get the answer", answer)
 
                 if (asynchTests.incrementAndGet == asynchTestCount) {
-                  after(sessionId)
+                  val sessionTimer: Long = msgAfterGet.body().getLong("sessionTimer")
+                  println(s"afterPutAndGetDo: sessionTimer = $sessionTimer")
+                  after(sessionId, timerId)
                 }
             })
       }
@@ -228,7 +236,7 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
   def testCreateSession() {
     afterClearDo {
       afterCreateDo {
-        sessionId =>
+        (sessionId: String, timerId: Long) =>
           testComplete()
       }
     }
@@ -237,7 +245,7 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
   def testPutSession() {
     afterClearDo {
       afterPutDo {
-        sessionId =>
+        (sessionId: String, timerId: Long) =>
           // Provoke an error message because of an invalid sessionId
           getVertx().eventBus().send(smAddress,
             new JsonObject().putString("action", "put")
@@ -254,7 +262,7 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
   def testPutAndGetSession() {
     afterClearDo {
       afterPutAndGetDo {
-        sessionId =>
+        (sessionId: String, timerId: Long) =>
           testComplete()
       }
     }
@@ -263,7 +271,7 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
   def testGetFieldsSession() {
     afterClearDo {
       afterPutDo {
-        sessionId =>
+        (sessionId: String, timerId: Long) =>
           val asynchTestCount = 3
           val asynchTests = new AtomicInteger(0)
 
@@ -308,7 +316,7 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
 
   def testCheckErrorTypes() {
     afterPutDo {
-      sessionId =>
+      (sessionId: String, timerId: Long) =>
         val asynchTestCount = 11
         val asynchTests = new AtomicInteger(0)
 
@@ -383,7 +391,7 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
   def testOverwriteSessionData() {
     afterClearDo {
       afterPutAndGetDo {
-        sessionId =>
+        (sessionId: String, timerId: Long) =>
           getVertx().eventBus().send(smAddress, new JsonObject().putString("action", "put")
             .putString("sessionId", sessionId)
             .putObject("data", new JsonObject()
@@ -415,9 +423,9 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
     import scala.collection.JavaConversions._
     afterClearDo {
       afterPutDo(new JsonObject().putString("teststring", "ok").putNumber("answer", 15)) {
-        sessionId1 =>
+        (sessionId1: String, timerId: Long) =>
           afterPutDo(new JsonObject().putString("teststring", "ok").putNumber("answer", 16)) {
-            sessionId2 =>
+            (sessionId2: String, timerId: Long) =>
 
               val asynchTestCount = 5
               val asynchTests = new AtomicInteger(0)
@@ -508,7 +516,7 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
 
             for (i <- 1 to asynchTestCount) {
               afterCreateDo {
-                otherSessionId =>
+                (otherSessionId: String, timerId: Long) =>
                   getVertx().eventBus().send(smAddress, new JsonObject().putString("action", "status").putString("report", "connections"),
                     continueAfterNoErrorReply {
                       openSessionsMsg =>
@@ -534,12 +542,13 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
     }
   }
 
-  def testDestroySession() {
+  /*def testDestroySession() {
     afterClearDo {
       afterPutAndGetDo {
-        sessionId =>
+        (sessionId: String, timerId: Long) =>
+          println(s"testDestroySession: timerId = $timerId")
           getVertx().eventBus().send(smAddress,
-            new JsonObject().putString("action", "destroy").putString("sessionId", sessionId),
+            new JsonObject().putString("action", "destroy").putString("sessionId", sessionId).putNumber("timerId", timerId),
             continueAfterNoErrorReply {
               msgAfterDestroy =>
                 assertTrue("session should have been destroyed", msgAfterDestroy.body.getBoolean("sessionDestroyed", false))
@@ -568,7 +577,7 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
             })
       }
     }
-  }
+  }*/
 
   def testCleanupAfterSession() {
     afterClearDo {
@@ -589,7 +598,7 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
       getVertx().eventBus().registerHandler(cleanupAddress, handler)
 
       afterPutDo {
-        sessionId =>
+        (sessionId: String, timerId: Long) =>
           getVertx().eventBus().send(smAddress, new JsonObject().putString("action", "destroy").putString("sessionId", sessionId))
       }
     }
@@ -597,7 +606,7 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
 
   def testNoSessionsAfterTimeout() {
     afterClearDo {
-      afterCreateDo { sessionId =>
+      afterCreateDo { (sessionId: String, timerId: Long) =>
         Thread.sleep(defaultTimeout + 100)
         getVertx().eventBus().send(smAddress, new JsonObject().putString("action", "status").putString("report", "connections"),
           continueAfterNoErrorReply {
@@ -613,7 +622,7 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
   def testTimeoutSession() {
     afterClearDo {
       afterPutDo {
-        sessionId =>
+        (sessionId: String, timerId: Long) =>
           var statusReceived = false
 
           val address = sessionClientPrefix + sessionId
@@ -645,7 +654,7 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
   def testNoTimeoutSession() {
     afterClearDo {
       afterPutDo {
-        sessionId =>
+        (sessionId: String, timerId: Long) =>
           Thread.sleep(noTimeoutTest)
           getSessionData(sessionId, new JsonArray().addString("teststring")) {
             data =>
@@ -664,7 +673,7 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
   def testHeartbeatSession() {
     afterClearDo {
       afterPutAndGetDo {
-        sessionId =>
+        (sessionId: String, timerId: Long) =>
           Thread.sleep(noTimeoutTest)
           getVertx().eventBus().send(smAddress, new JsonObject().putString("action", "heartbeat").putString("sessionId", sessionId),
             continueAfterNoErrorReply { msg =>
@@ -686,7 +695,7 @@ abstract class SessionManagerBaseTestClient extends TestVerticle with VertxScala
   def testRemoveValueFromSession() {
     afterClearDo {
       afterPutDo {
-        sessionId =>
+        (sessionId: String, timerId: Long) =>
           Thread.sleep(noTimeoutTest)
           removeSessionValue(sessionId, new JsonArray().addString("teststring")) {
             result =>

@@ -1,21 +1,11 @@
 package com.campudus.vertx.sessionmanager
 
-import java.util.UUID
-import com.vsct.vertx.sessionmanager.IdGenerator
-
-import scala.collection.JavaConversions.asScalaSet
-import scala.collection.JavaConversions.iterableAsScalaIterable
-import org.vertx.java.core.AsyncResult
-import org.vertx.java.core.AsyncResultHandler
-import org.vertx.java.core.Handler
 import org.vertx.java.core.eventbus.Message
 import org.vertx.java.core.json.JsonArray
 import org.vertx.java.core.json.JsonElement
 import org.vertx.java.core.json.JsonObject
 import scala.concurrent.Future
 import scala.concurrent.Promise
-import scala.util.Success
-import scala.util.Failure
 
 class MongoDbSessionStore(sm: SessionManager, address: String, collection: String) extends SessionManagerSessionStore with VertxScalaHelpers {
   import com.campudus.vertx.DefaultVertxExecutionContext.global
@@ -59,9 +49,12 @@ class MongoDbSessionStore(sm: SessionManager, address: String, collection: Strin
     val action = mongoAction("findone").putObject("matcher", searchFor).
       putObject("keys", jsonArrayToFieldSelection(fields))
     sendToPersistor(action) map checkMongoErrors map { result =>
+      println(s"getSessionData: ${Console.GREEN}result=$result${Console.RESET}")
       Option(result.getObject("result")) match {
         case None => throw SessionException.gone()
-        case Some(foundSession) => foundSession
+        case Some(foundSession) =>
+          println(s"getSessionData: ${Console.GREEN}$foundSession${Console.RESET}")
+          foundSession
       }
     }
   }
@@ -129,10 +122,7 @@ class MongoDbSessionStore(sm: SessionManager, address: String, collection: Strin
             case Some(tid) =>
               if (tid equals sessionTimer) {
                 sendToPersistor(mongoAction("delete").putObject("matcher", searchFor)) map checkMongoErrors map {
-                  deleteResult =>
-                    json
-                      .putNumber("sessionTimer", sessionTimer)
-                      .putObject("session", obj.getObject("data"))
+                  deleteResult => json.putNumber("sessionTimer", sessionTimer).putObject("session", obj.getObject("data"))
                 }
               }
               else Future.successful(json)
@@ -140,12 +130,6 @@ class MongoDbSessionStore(sm: SessionManager, address: String, collection: Strin
       }
     }
   }
-
-  /*private def listToJsonStringArray(l: List[String]): JsonArray = {
-    val arr = new JsonArray()
-    l.foreach(arr.addString)
-    arr
-  }*/
 
   private def findAndModify(
     query: Option[JsonObject] = None,
@@ -190,12 +174,12 @@ class MongoDbSessionStore(sm: SessionManager, address: String, collection: Strin
     findAndUpdateSessionTimer(sessionId, newTimerId)
   }
 
-  override def startSession(sessionId:String, timerId: Long): Future[String] = {
+  override def startSession(sessionId:String, timerId: Long): Future[(String, Long)] = {
     sendToPersistor(mongoAction("save")
       .putObject("document", json
         .putString("sessionId", sessionId)
         .putNumber("sessionTimer", timerId))) map checkMongoErrors transform ({
-      case _ => sessionId
+      case _ => (sessionId, timerId)
     }, {
       case error =>
         sm.cancelTimer(timerId)
